@@ -70,3 +70,16 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     except jwt.InvalidTokenError as e:
         logger.debug(f"Invalid token: {e}")
         return None
+
+
+def validate_access_token(token: str) -> Dict[str, Any]:
+    """
+    Decodes and validates a JWT token.
+    Raises explicit ValueError for expiration or invalid signatures.
+    """
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise ValueError("Token has expired. Please log in again.")
+    except jwt.InvalidTokenError as e:
+        raise ValueError(f"Invalid token: {e}")

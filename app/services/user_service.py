@@ -19,14 +19,16 @@ class UserService:
     - Guarantees HOD bootstrap account creation on initial startup
     """
 
-    def __init__(self, db_path: Optional[str] = None, mongo_uri: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, mongo_uri: Optional[str] = None, mongo_client: Optional[Any] = None):
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.db_path = db_path or os.path.join(base_dir, "database", "smartclass.sqlite")
         self.mongo_uri = mongo_uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        self.db_name = os.getenv("DATABASE_NAME", "smartclass_vision_ai")
+        self.db_name = os.getenv("MONGODB_DATABASE", os.getenv("DATABASE_NAME", "smartclass_vision_ai"))
 
-        self.mongo_client: Optional[MongoClient] = None
+        self.mongo_client: Optional[MongoClient] = mongo_client
         self.mongo_users_col = None
+        self.mongo_faculty_col = None
+        self.mongo_advisors_col = None
         self.mongo_online = False
 
         # 1. Initialize local SQLite table
@@ -35,8 +37,9 @@ class UserService:
         # 2. Try connecting to MongoDB (non-blocking, won't crash if offline)
         self._init_mongodb()
 
-        # 3. Bootstrap default HOD account
+        # 3. Bootstrap default accounts
         self._bootstrap_hod_account()
+        self._bootstrap_faculty_account()
 
     def _init_sqlite(self):
         """Initializes SQLite users table for persistent storage."""
@@ -62,20 +65,30 @@ class UserService:
             conn.commit()
 
     def _init_mongodb(self):
-        """Attempts connection to MongoDB and creates unique index on user_id."""
+        """Attempts connection to MongoDB and creates unique index on user_id, faculty_id, advisor_id."""
         try:
-            self.mongo_client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=1500)
-            # Ping database to verify connection
-            self.mongo_client.admin.command('ping')
+            if self.mongo_client is None:
+                self.mongo_client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=1500)
+                self.mongo_client.admin.command('ping')
+
             db = self.mongo_client[self.db_name]
             self.mongo_users_col = db["users"]
+            self.mongo_faculty_col = db["faculty"]
+            self.mongo_advisors_col = db["advisors"]
+
             self.mongo_users_col.create_index([("user_id", ASCENDING)], unique=True)
+            self.mongo_users_col.create_index([("email", ASCENDING)], sparse=True)
+            self.mongo_faculty_col.create_index([("faculty_id", ASCENDING)], unique=True)
+            self.mongo_advisors_col.create_index([("advisor_id", ASCENDING)], unique=True)
+
             self.mongo_online = True
             logger.info(f"MongoDB successfully connected at {self.mongo_uri}, database: {self.db_name}")
         except Exception as e:
             self.mongo_online = False
             self.mongo_client = None
             self.mongo_users_col = None
+            self.mongo_faculty_col = None
+            self.mongo_advisors_col = None
             logger.warning(f"MongoDB offline or unreachable ({e}). Operating in resilient local storage mode.")
 
     def _bootstrap_hod_account(self):
@@ -101,6 +114,31 @@ class UserService:
             )
             self.create_user(hod)
             logger.info(f"Bootstrapped default HOD account '{default_hod_id}'.")
+
+    def _bootstrap_faculty_account(self):
+        """Ensures a default Faculty account exists for teaching & lecture access."""
+        default_fac_id = os.getenv("DEFAULT_FACULTY_USER_ID", "FAC001")
+        default_fac_pass = os.getenv("DEFAULT_FACULTY_PASSWORD", "faculty123")
+        default_fac_name = os.getenv("DEFAULT_FACULTY_NAME", "Dr. Anand Kumar")
+
+        existing = self.get_user_by_id(default_fac_id)
+        if not existing:
+            hashed = hash_password(default_fac_pass)
+            now = datetime.datetime.utcnow().isoformat()
+            fac = UserModel(
+                user_id=default_fac_id,
+                name=default_fac_name,
+                role=UserRole.FACULTY,
+                password_hash=hashed,
+                email="faculty.aids@college.edu",
+                department="AI&DS",
+                assigned_classroom="AIDS-B",
+                status=UserStatus.ACTIVE,
+                created_at=now,
+                updated_at=now
+            )
+            self.create_user(fac)
+            logger.info(f"Bootstrapped default Faculty account '{default_fac_id}'.")
 
     def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
         """Retrieves a user by user_id from MongoDB (if online) or SQLite."""
@@ -182,6 +220,30 @@ class UserService:
         if self.mongo_online and self.mongo_users_col is not None:
             try:
                 self.mongo_users_col.insert_one(user_dict.copy())
+                # Also persist to role-specific collections
+                if user.role == UserRole.FACULTY and self.mongo_faculty_col is not None:
+                    self.mongo_faculty_col.update_one(
+                        {"faculty_id": user.user_id},
+                        {"$set": {
+                            "faculty_id": user.user_id, "name": user.name, "email": user.email,
+                            "phone": user.phone, "department": user.department or "AI&DS",
+                            "assigned_classroom": user.assigned_classroom, "status": user.status.value,
+                            "created_at": user.created_at, "updated_at": user.updated_at
+                        }},
+                        upsert=True
+                    )
+                elif user.role == UserRole.CLASS_ADVISOR and self.mongo_advisors_col is not None:
+                    self.mongo_advisors_col.update_one(
+                        {"advisor_id": user.user_id},
+                        {"$set": {
+                            "advisor_id": user.user_id, "name": user.name, "email": user.email,
+                            "phone": user.phone, "department": user.department or "AI&DS",
+                            "year": user.year or "3rd Year", "section": user.section or "B",
+                            "assigned_classroom": user.assigned_classroom, "status": user.status.value,
+                            "created_at": user.created_at, "updated_at": user.updated_at
+                        }},
+                        upsert=True
+                    )
             except Exception as e:
                 logger.warning(f"MongoDB insert error for user '{user.user_id}': {e}")
 
@@ -216,6 +278,10 @@ class UserService:
         if self.mongo_online and self.mongo_users_col is not None:
             try:
                 self.mongo_users_col.update_one({"user_id": user_id}, {"$set": updates})
+                if user.role == UserRole.FACULTY and self.mongo_faculty_col is not None:
+                    self.mongo_faculty_col.update_one({"faculty_id": user_id}, {"$set": updates})
+                elif user.role == UserRole.CLASS_ADVISOR and self.mongo_advisors_col is not None:
+                    self.mongo_advisors_col.update_one({"advisor_id": user_id}, {"$set": updates})
             except Exception as e:
                 logger.warning(f"MongoDB update error: {e}")
 
@@ -235,6 +301,11 @@ class UserService:
         if self.mongo_online and self.mongo_users_col is not None:
             try:
                 self.mongo_users_col.update_one({"user_id": user_id}, {"$set": {"status": clean_status, "updated_at": now}})
+                user = self.get_user_by_id(user_id)
+                if user and user.role == UserRole.FACULTY and self.mongo_faculty_col is not None:
+                    self.mongo_faculty_col.update_one({"faculty_id": user_id}, {"$set": {"status": clean_status, "updated_at": now}})
+                elif user and user.role == UserRole.CLASS_ADVISOR and self.mongo_advisors_col is not None:
+                    self.mongo_advisors_col.update_one({"advisor_id": user_id}, {"$set": {"status": clean_status, "updated_at": now}})
             except Exception as e:
                 logger.warning(f"MongoDB status update error: {e}")
 
@@ -277,6 +348,29 @@ class UserService:
                 advisors.append(UserModel(**dict(row)))
 
         return advisors
+
+    def list_faculty(self) -> List[UserModel]:
+        """Lists all Faculty members."""
+        faculty: List[UserModel] = []
+        if self.mongo_online and self.mongo_users_col is not None:
+            try:
+                docs = self.mongo_users_col.find({"role": UserRole.FACULTY.value}).sort("name", 1)
+                for d in docs:
+                    d.pop("_id", None)
+                    faculty.append(UserModel(**d))
+                return faculty
+            except Exception as e:
+                logger.debug(f"MongoDB list faculty error: {e}")
+
+        # SQLite fallback
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE role = 'faculty' ORDER BY name ASC;")
+            for row in cur.fetchall():
+                faculty.append(UserModel(**dict(row)))
+
+        return faculty
 
     def get_all_users(self) -> List[UserModel]:
         """Lists all users across roles."""

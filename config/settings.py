@@ -117,11 +117,19 @@ class DashboardSettings(BaseModel):
     poll_interval_ms: int = Field(default_factory=lambda: int(os.getenv("DASHBOARD_POLL_INTERVAL_MS", "1500")))
     debug_mode_default: bool = Field(default_factory=lambda: os.getenv("DASHBOARD_DEBUG_MODE", "False").lower() == "true")
 
+class MongoSettings(BaseModel):
+    uri: str = Field(default_factory=lambda: os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+    database: str = Field(default_factory=lambda: os.getenv("MONGODB_DATABASE", os.getenv("DATABASE_NAME", "smartclass_vision_ai")))
+    timeout_ms: int = Field(default_factory=lambda: int(os.getenv("MONGODB_TIMEOUT_MS", "1500")))
+    max_pool_size: int = Field(default_factory=lambda: int(os.getenv("MONGODB_MAX_POOL_SIZE", "50")))
+    enabled: bool = Field(default_factory=lambda: os.getenv("MONGODB_ENABLED", "True").lower() == "true")
+
 class AppSettings(BaseModel):
     environment: str = Field(default_factory=lambda: os.getenv("ENVIRONMENT", "development"))
     log_level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     log_dir: str = Field(default_factory=lambda: os.getenv("LOG_DIR", "logs"))
     db_path: str = Field(default_factory=lambda: os.getenv("DB_PATH", "database/smartclass.sqlite"))
+    mongodb: MongoSettings = Field(default_factory=MongoSettings)
     camera: CameraSettings = Field(default_factory=CameraSettings)
     detection: DetectionSettings = Field(default_factory=DetectionSettings)
     quality: QualitySettings = Field(default_factory=QualitySettings)

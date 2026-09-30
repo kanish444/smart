@@ -70,8 +70,18 @@ def create_app() -> FastAPI:
             content=ApiResponse.fail(code="VALIDATION_ERROR", message=msg).model_dump()
         )
 
+    from starlette.requests import ClientDisconnect
+    from fastapi.responses import Response
+
+    @app.exception_handler(ClientDisconnect)
+    async def client_disconnect_handler(request: Request, exc: ClientDisconnect):
+        logger.debug("Client disconnected during response stream.")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
+        if isinstance(exc, ClientDisconnect):
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         logger.error(f"Unhandled server error: {exc}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -102,6 +112,8 @@ def create_app() -> FastAPI:
                 role = payload.get("role")
                 if role == "hod":
                     return RedirectResponse(url="/hod/dashboard", status_code=303)
+                elif role == "faculty":
+                    return RedirectResponse(url="/faculty/dashboard", status_code=303)
                 elif role == "class_advisor":
                     return RedirectResponse(url="/advisor/dashboard", status_code=303)
         return FileResponse(os.path.join(dashboard_dir, "login.html"))
@@ -117,19 +129,48 @@ def create_app() -> FastAPI:
                 role = payload.get("role")
                 if role == "hod":
                     return RedirectResponse(url="/hod/dashboard", status_code=303)
+                elif role == "faculty":
+                    return RedirectResponse(url="/faculty/dashboard", status_code=303)
                 elif role == "class_advisor":
                     return RedirectResponse(url="/advisor/dashboard", status_code=303)
         return RedirectResponse(url="/login", status_code=303)
 
     @app.get("/hod/dashboard", include_in_schema=False)
-    async def serve_hod_dashboard():
+    async def serve_hod_dashboard(request: Request):
+        token = request.cookies.get("access_token")
+        if token:
+            from app.core.security import decode_access_token
+            payload = decode_access_token(token)
+            if payload and payload.get("role") == "class_advisor":
+                return RedirectResponse(url="/advisor/dashboard", status_code=303)
+            elif payload and payload.get("role") == "faculty":
+                return RedirectResponse(url="/faculty/dashboard", status_code=303)
         hod_file = os.path.join(dashboard_dir, "hod_dashboard.html")
         if os.path.exists(hod_file):
             return FileResponse(hod_file)
         return RedirectResponse(url="/login", status_code=303)
 
+    @app.get("/faculty/dashboard", include_in_schema=False)
+    async def serve_faculty_dashboard(request: Request):
+        token = request.cookies.get("access_token")
+        if token:
+            from app.core.security import decode_access_token
+            payload = decode_access_token(token)
+            if payload and payload.get("role") == "class_advisor":
+                return RedirectResponse(url="/advisor/dashboard", status_code=303)
+        faculty_file = os.path.join(dashboard_dir, "faculty_dashboard.html")
+        if os.path.exists(faculty_file):
+            return FileResponse(faculty_file)
+        return RedirectResponse(url="/login", status_code=303)
+
     @app.get("/advisor/dashboard", include_in_schema=False)
-    async def serve_advisor_dashboard():
+    async def serve_advisor_dashboard(request: Request):
+        token = request.cookies.get("access_token")
+        if token:
+            from app.core.security import decode_access_token
+            payload = decode_access_token(token)
+            if payload and payload.get("role") == "faculty":
+                return RedirectResponse(url="/faculty/dashboard", status_code=303)
         advisor_file = os.path.join(dashboard_dir, "advisor_dashboard.html")
         if os.path.exists(advisor_file):
             return FileResponse(advisor_file)
@@ -138,11 +179,10 @@ def create_app() -> FastAPI:
     @app.get("/smartboard", include_in_schema=False)
     @app.get("/live", include_in_schema=False)
     @app.get("/classroom/monitor", include_in_schema=False)
-    async def serve_smartboard_monitor():
-        index_file = os.path.join(dashboard_dir, "index.html")
-        if os.path.exists(index_file):
-            return FileResponse(index_file)
-        return RedirectResponse(url="/login", status_code=303)
+    async def serve_smartboard_monitor(request: Request):
+        """Legacy monitor URLs redirect to role-specific dashboard or login."""
+        return RedirectResponse(url="/dashboard", status_code=303)
+
 
     return app
 

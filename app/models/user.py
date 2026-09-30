@@ -6,6 +6,7 @@ from enum import Enum
 
 class UserRole(str, Enum):
     HOD = "hod"
+    FACULTY = "faculty"
     CLASS_ADVISOR = "class_advisor"
 
 
@@ -16,9 +17,9 @@ class UserStatus(str, Enum):
 
 class UserModel(BaseModel):
     """Internal user model stored in MongoDB/DB repository."""
-    user_id: str = Field(..., description="Unique User ID (e.g. HOD001, ADV001)")
+    user_id: str = Field(..., description="Unique User ID (e.g. HOD001, FAC001, ADV001)")
     name: str = Field(..., description="Full Name of the user")
-    role: UserRole = Field(..., description="Role: hod or class_advisor")
+    role: UserRole = Field(..., description="Role: hod, faculty, or class_advisor")
     password_hash: str = Field(..., description="Bcrypt hashed password")
     email: Optional[str] = Field(None, description="Contact email")
     phone: Optional[str] = Field(None, description="Contact phone")
@@ -84,6 +85,31 @@ class UpdateAdvisorRequest(BaseModel):
 
 
 class ResetAdvisorPasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=6)
+
+
+class CreateFacultyRequest(BaseModel):
+    user_id: str = Field(..., min_length=3, max_length=50, description="Unique Faculty User ID")
+    name: str = Field(..., min_length=2, max_length=100, description="Faculty Full Name")
+    password: str = Field(..., min_length=6, description="Initial Password")
+    confirm_password: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    department: str = Field(..., description="Department, e.g. AI&DS")
+    assigned_classroom: Optional[str] = Field(None, description="Primary Classroom, e.g. AIDS-B")
+    status: Optional[str] = "active"
+
+
+class UpdateFacultyRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    assigned_classroom: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ResetFacultyPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6)
 
 

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartClass Vision AI - Faculty Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/role_dashboard.css">
+  <style>
+    .sensor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1rem;
+    }
+    .sensor-card {
+      background: #FFFFFF;
+      border: 1px solid var(--border-color, #E2E8F0);
+      border-radius: 12px;
+      padding: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .sensor-val {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #0F172A;
+      margin: 0.4rem 0;
+      font-family: var(--font-mono, monospace);
+    }
+    .brand-subtitle-faculty {
+      color: #0284C7;
+      font-weight: 700;
+    }
+    .panel-mt {
+      margin-top: 1.5rem;
+    }
+    .text-muted {
+      color: #64748B;
+    }
+    .d-none {
+      display: none;
+    }
+    .live-feed-img {
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #CBD5E1;
+      max-height: 540px;
+      background: #000;
+    }
+    .sensor-sub {
+      font-size: 0.8rem;
+      color: #64748B;
+    }
+    .sensor-good {
+      color: #059669;
+    }
+    .sensor-connected {
+      font-size: 1.1rem;
+      color: #0284C7;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===================================================================== -->
+  <!-- FIXED SIDEBAR                                                         -->
+  <!-- ===================================================================== -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-badge" title="SmartClass Institutional AI">
+        <img src="/static/img/smartclass_logo.png" alt="SmartClass Logo" class="sidebar-crest-logo">
+      </div>
+      <div class="brand-text">
+        <h2>SmartClass</h2>
+        <span class="brand-subtitle-faculty">Faculty Portal</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a class="nav-link active" onclick="switchTab('dashboard')">
+        <span class="nav-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </span>
+        <span>Dashboard</span>
+      </a>
+
+      <a class="nav-link" onclick="switchTab('live')">
+        <span class="nav-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 7l-7 5 7 5V7z"></path>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+        </span>
+        <span>Live Classroom</span>
+      </a>
+
+      <a class="nav-link" onclick="switchTab('attendance')">
+        <span class="nav-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+          </svg>
+        </span>
+        <span>Attendance</span>
+      </a>
+
+      <a class="nav-link" onclick="switchTab('sensors')">
+        <span class="nav-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+          </svg>
+        </span>
+        <span>IoT Sensors</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="sidebarAvatar">F</div>
+        <div class="user-details">
+          <div class="user-name" id="sidebarUserName">Faculty Member</div>
+          <div class="user-role-badge">Faculty</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="handleLogout()" title="Sign Out">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+          <polyline points="16 17 21 12 16 7"></polyline>
+          <line x1="21" y1="12" x2="9" y2="12"></line>
+        </svg>
+        <span>Logout</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ===================================================================== -->
+  <!-- MAIN CONTENT AREA                                                     -->
+  <!-- ===================================================================== -->
+  <main class="main-content">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 id="pageTitle">Faculty Instructional Dashboard</h1>
+        <p id="pageSubtitle">Real-Time Classroom Monitoring & Live Attendance</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="status-indicator online" id="systemIndicator">
+          <span class="status-dot"></span>
+          <span id="systemStatusText">AI Pipeline Online</span>
+        </span>
+        <button class="btn btn-secondary" onclick="refreshData()">
+          🔄 Refresh
+        </button>
+      </div>
+    </header>
+
+    <div class="content-body">
+      <!-- 1. DASHBOARD TAB -->
+      <section id="tab-dashboard" class="tab-pane active">
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-title">Total Enrolled</div>
+            <div class="stat-value" id="cardTotalStudents">--</div>
+            <div class="stat-sub">Class Roster Size</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Present Today</div>
+            <div class="stat-value text-success" id="cardPresent">--</div>
+            <div class="stat-sub">Face Verified</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Absent</div>
+            <div class="stat-value text-danger" id="cardAbsent">--</div>
+            <div class="stat-sub">Pending / Missing</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Attendance Rate</div>
+            <div class="stat-value" id="cardPercentage">--%</div>
+            <div class="stat-sub">Active Session</div>
+          </div>
+        </div>
+
+        <div class="panel panel-mt">
+          <div class="panel-header">
+            <h3>Active Instructional Session</h3>
+            <span class="badge" id="sessionStatusBadge">NO SESSION</span>
+          </div>
+          <div class="panel-body" id="activeSessionInfo">
+            <p class="text-muted">No lecture session is currently active. Start or monitor instructional sessions from the Attendance tab.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. LIVE CLASSROOM TAB -->
+      <section id="tab-live" class="tab-pane d-none">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Smart Board Live Feed</h3>
+          </div>
+          <div class="panel-body text-center">
+            <img src="/api/video/feed" alt="Live Feed" class="live-feed-img" onerror="this.alt='Camera Stream Offline'">
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. ATTENDANCE TAB -->
+      <section id="tab-attendance" class="tab-pane d-none">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Real-Time Session Attendance</h3>
+            <div class="btn-group">
+              <button class="btn btn-sm btn-secondary" onclick="exportAttendance('csv')">Export CSV</button>
+              <button class="btn btn-sm btn-secondary" onclick="exportAttendance('json')">Export JSON</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="attendanceTableContainer">
+              <p class="text-muted">Loading session attendance records...</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. SENSORS TAB -->
+      <section id="tab-sensors" class="tab-pane d-none">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Smart Classroom IoT Environmental Telemetry</h3>
+            <button class="btn btn-sm btn-secondary" onclick="loadSensors()">Poll Sensors</button>
+          </div>
+          <div class="panel-body">
+            <div class="sensor-grid">
+              <div class="sensor-card">
+                <div class="sensor-label">🌡️ Room Temperature</div>
+                <div class="sensor-val" id="sensorTemp">24.5 °C</div>
+                <div class="sensor-sub">Comfort Zone: 22 - 26 °C</div>
+              </div>
+              <div class="sensor-card">
+                <div class="sensor-label">💧 Relative Humidity</div>
+                <div class="sensor-val" id="sensorHumidity">55.0 %</div>
+                <div class="sensor-sub">Optimal: 40 - 60 %</div>
+              </div>
+              <div class="sensor-card">
+                <div class="sensor-label">🍃 Air Quality (IAQ)</div>
+                <div class="sensor-val sensor-good" id="sensorAirQuality">GOOD</div>
+                <div class="sensor-sub">CO2 & TVOC Monitored</div>
+              </div>
+              <div class="sensor-card">
+                <div class="sensor-label">📡 ESP32 Hub Status</div>
+                <div class="sensor-val sensor-connected" id="sensorStatus">CONNECTED</div>
+                <div class="sensor-sub" id="sensorDevice">Device: ESP32_MAIN_01</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    let currentUser = null;
+
+    async function initFacultyPortal() {
+      try {
+        const resp = await fetch("/api/auth/me");
+        if (!resp.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const data = await resp.json();
+        if (!data.success || data.data.role !== "faculty") {
+          window.location.href = "/login";
+          return;
+        }
+        currentUser = data.data;
+        document.getElementById("sidebarUserName").innerText = currentUser.name;
+        document.getElementById("sidebarAvatar").innerText = currentUser.name.charAt(0).toUpperCase();
+
+        await refreshData();
+      } catch (err) {
+        console.error("Auth init failure:", err);
+        window.location.href = "/login";
+      }
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll(".sidebar-nav .nav-link").forEach(l => l.classList.remove("active"));
+      document.querySelectorAll(".tab-pane").forEach(p => p.style.display = "none");
+
+      const navEl = event?.currentTarget;
+      if (navEl) navEl.classList.add("active");
+
+      const targetPane = document.getElementById("tab-" + tabId);
+      if (targetPane) targetPane.style.display = "block";
+
+      if (tabId === "sensors") loadSensors();
+      if (tabId === "attendance") loadAttendance();
+    }
+
+    async function refreshData() {
+      try {
+        const resp = await fetch("/api/dashboard/role-summary");
+        if (!resp.ok) return;
+        const res = await resp.json();
+        if (res.success && res.data) {
+          const cards = res.data.cards || {};
+          document.getElementById("cardTotalStudents").innerText = cards.total_students || 0;
+          document.getElementById("cardPresent").innerText = cards.present_today || 0;
+          document.getElementById("cardAbsent").innerText = cards.absent_today || 0;
+          document.getElementById("cardPercentage").innerText = (cards.attendance_percentage || 0) + "%";
+
+          const sess = res.data.active_session;
+          if (sess) {
+            document.getElementById("sessionStatusBadge").innerText = sess.status;
+            document.getElementById("sessionStatusBadge").className = "badge badge-success";
+            document.getElementById("activeSessionInfo").innerHTML = `
+              <strong>Session ID:</strong> ${sess.session_id} | 
+              <strong>Subject:</strong> ${sess.subject} | 
+              <strong>Class:</strong> ${sess.class_section}
+            `;
+          } else {
+            document.getElementById("sessionStatusBadge").innerText = "NO ACTIVE SESSION";
+            document.getElementById("sessionStatusBadge").className = "badge";
+            document.getElementById("activeSessionInfo").innerHTML = `<p style="color: #64748B;">No lecture session currently running.</p>`;
+          }
+        }
+      } catch (e) {
+        console.warn("Refresh failed:", e);
+      }
+    }
+
+    async function loadSensors() {
+      try {
+        const resp = await fetch("/api/sensors/status");
+        if (!resp.ok) return;
+        const r = await resp.json();
+        if (r.success && r.data) {
+          const d = r.data;
+          document.getElementById("sensorTemp").innerText = d.temperature_c + " °C";
+          document.getElementById("sensorHumidity").innerText = d.humidity_pct + " %";
+          document.getElementById("sensorAirQuality").innerText = d.air_quality;
+          document.getElementById("sensorStatus").innerText = d.status;
+          document.getElementById("sensorDevice").innerText = "Device: " + d.esp32_device_id;
+        }
+      } catch (e) {
+        console.warn("Sensor fetch error:", e);
+      }
+    }
+
+    async function loadAttendance() {
+      try {
+        const resp = await fetch("/api/attendance/current");
+        if (!resp.ok) return;
+        const r = await resp.json();
+        const container = document.getElementById("attendanceTableContainer");
+        if (r.success && r.data && r.data.records) {
+          const records = r.data.records;
+          if (records.length === 0) {
+            container.innerHTML = `<p style="color: #64748B;">No attendance records in current session.</p>`;
+            return;
+          }
+          let html = `<table class="data-table"><thead><tr><th>Reg No</th><th>Name</th><th>Status</th><th>First Seen</th></tr></thead><tbody>`;
+          for (const rec of records) {
+            html += `<tr><td>${rec.student_id}</td><td>${rec.student_name}</td><td><span class="badge ${rec.status === 'PRESENT' ? 'badge-success' : 'badge-danger'}">${rec.status}</span></td><td>${rec.first_seen || '--'}</td></tr>`;
+          }
+          html += `</tbody></table>`;
+          container.innerHTML = html;
+        } else {
+          container.innerHTML = `<p style="color: #64748B;">No active session report available.</p>`;
+        }
+      } catch (e) {
+        console.warn("Attendance load error:", e);
+      }
+    }
+
+    async function handleLogout() {
+      try {
+        await fetch("/api/auth/logout", { method: "POST" });
+      } finally {
+        localStorage.removeItem("smartclass_token");
+        localStorage.removeItem("smartclass_user");
+        window.location.href = "/login";
+      }
+    }
+
+    function exportAttendance(type) {
+      window.open(`/api/export/attendance/current/${type}`, "_blank");
+    }
+
+    document.addEventListener("DOMContentLoaded", initFacultyPortal);
+  </script>
+</body>
+</html>

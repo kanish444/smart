@@ -27,3 +27,9 @@ pyjwt
 bcrypt
 pymongo
 motor
+mongomock
+
+# Student Excel Import & Data Processing
+python-multipart
+openpyxl
+pandas

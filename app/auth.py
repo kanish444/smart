@@ -1,10 +1,10 @@
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from fastapi import Header, Query, Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, validate_access_token
 from app.models.user import UserModel, UserRole, UserStatus
 from app.services.user_service import UserService
 
@@ -33,6 +33,7 @@ class AuthContext(BaseModel):
     section: Optional[str] = None
     assigned_classroom: Optional[str] = None
     is_hod: bool = False
+    is_faculty: bool = False
     is_advisor: bool = False
     is_operator: bool = False
 
@@ -40,28 +41,40 @@ class AuthContext(BaseModel):
 def get_current_user(
     auth_header: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     access_token_cookie: Optional[str] = Cookie(None, alias="access_token"),
+    token_query: Optional[str] = Query(None, alias="token"),
     x_operator_token: Optional[str] = Header(None, alias="X-Operator-Token"),
     operator_token: Optional[str] = Query(None, alias="operator_token"),
     user_service: UserService = Depends(get_user_service)
 ) -> UserModel:
     """
-    Extracts and authenticates the user from JWT Bearer Header, Cookie, or Operator Token.
-    Validates token expiration, signature, and account active status.
+    Extracts and authenticates the user from JWT Bearer Header, Cookie, Query, or Operator Token.
+    Validates token signature, expiration, user existence, and account active status.
     """
     token = None
     if auth_header and auth_header.credentials:
         token = auth_header.credentials
     elif access_token_cookie:
         token = access_token_cookie
+    elif token_query:
+        token = token_query
 
     if token:
-        payload = decode_access_token(token)
+        try:
+            payload = validate_access_token(token)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(e),
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
         if not payload or "sub" not in payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired authentication credentials.",
+                detail="Invalid authentication token payload.",
                 headers={"WWW-Authenticate": "Bearer"}
             )
+
         user_id = payload["sub"]
         user = user_service.get_user_by_id(user_id)
         if not user:
@@ -96,29 +109,49 @@ def get_current_user(
     )
 
 
-def require_hod(user: UserModel = Depends(get_current_user)) -> UserModel:
-    """Restricts endpoint access strictly to HOD (Full System Control)."""
-    if user.role != UserRole.HOD:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: HOD role required."
-        )
-    return user
+# =============================================================================
+# Reusable Role Dependency Factory
+# =============================================================================
+
+def require_roles(*allowed_roles: UserRole) -> Callable:
+    """Dependency factory restricting endpoint access to one or more UserRole enums."""
+    def role_checker(user: UserModel = Depends(get_current_user)) -> UserModel:
+        if user.role not in allowed_roles:
+            if len(allowed_roles) == 1 and allowed_roles[0] == UserRole.HOD:
+                msg = "Access forbidden: HOD role required."
+            elif len(allowed_roles) == 1 and allowed_roles[0] == UserRole.CLASS_ADVISOR:
+                msg = "Access forbidden: Class Advisor role required."
+            elif len(allowed_roles) == 1 and allowed_roles[0] == UserRole.FACULTY:
+                msg = "Access forbidden: Faculty role required."
+            else:
+                allowed_names = ", ".join(r.value.upper() for r in allowed_roles)
+                msg = f"Access forbidden: requires one of [{allowed_names}] role(s)."
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=msg
+            )
+        return user
+    return role_checker
 
 
-def require_class_advisor(user: UserModel = Depends(get_current_user)) -> UserModel:
-    """Restricts endpoint access to Class Advisor."""
-    if user.role != UserRole.CLASS_ADVISOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Class Advisor role required."
-        )
-    return user
+# Single & Multi-Role Dependencies
+require_authenticated_user = get_current_user
+require_any_authenticated_user = get_current_user
+require_hod = require_roles(UserRole.HOD)
+require_faculty = require_roles(UserRole.FACULTY)
+require_class_advisor = require_roles(UserRole.CLASS_ADVISOR)
+require_hod_or_faculty = require_roles(UserRole.HOD, UserRole.FACULTY)
+require_hod_or_advisor = require_roles(UserRole.HOD, UserRole.CLASS_ADVISOR)
 
-
-def require_any_authenticated_user(user: UserModel = Depends(get_current_user)) -> UserModel:
-    """Allows any active authenticated user (HOD or Class Advisor)."""
-    return user
+# Semantic Functional Dependencies (Aligned with Phase 12 Permission Matrix)
+require_dashboard_access = require_roles(UserRole.HOD, UserRole.FACULTY, UserRole.CLASS_ADVISOR)
+require_live_classroom_access = require_roles(UserRole.HOD, UserRole.FACULTY, UserRole.CLASS_ADVISOR)
+require_attendance_access = require_roles(UserRole.HOD, UserRole.FACULTY, UserRole.CLASS_ADVISOR)
+require_sensor_access = require_roles(UserRole.HOD, UserRole.FACULTY, UserRole.CLASS_ADVISOR)
+require_student_management = require_roles(UserRole.HOD, UserRole.CLASS_ADVISOR)
+require_faculty_management = require_roles(UserRole.HOD)
+require_classroom_management = require_roles(UserRole.HOD)
+require_session_control = require_roles(UserRole.HOD, UserRole.FACULTY)
 
 
 def get_current_role(
@@ -126,14 +159,17 @@ def get_current_role(
     operator_token: Optional[str] = Query(None, alias="operator_token"),
     auth_header: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     access_token_cookie: Optional[str] = Cookie(None, alias="access_token"),
+    token_query: Optional[str] = Query(None, alias="token"),
     user_service: UserService = Depends(get_user_service)
 ) -> AuthContext:
-    """Legacy compatibility helper."""
+    """Legacy compatibility helper extracting AuthContext."""
     token = None
     if auth_header and auth_header.credentials:
         token = auth_header.credentials
     elif access_token_cookie:
         token = access_token_cookie
+    elif token_query:
+        token = token_query
 
     if token:
         payload = decode_access_token(token)
@@ -141,6 +177,8 @@ def get_current_role(
             user = user_service.get_user_by_id(payload["sub"])
             if user and user.status == UserStatus.ACTIVE:
                 is_hod = (user.role == UserRole.HOD)
+                is_faculty = (user.role == UserRole.FACULTY)
+                is_advisor = (user.role == UserRole.CLASS_ADVISOR)
                 return AuthContext(
                     user_id=user.user_id,
                     name=user.name,
@@ -150,7 +188,8 @@ def get_current_role(
                     section=user.section,
                     assigned_classroom=user.assigned_classroom,
                     is_hod=is_hod,
-                    is_advisor=(user.role == UserRole.CLASS_ADVISOR),
+                    is_faculty=is_faculty,
+                    is_advisor=is_advisor,
                     is_operator=is_hod
                 )
 
@@ -158,22 +197,25 @@ def get_current_role(
     if op_tok and op_tok == OPERATOR_TOKEN:
         return AuthContext(user_id="OPERATOR", name="Operator", role="hod", is_hod=True, is_operator=True)
 
-    return AuthContext(user_id="ANONYMOUS", name="Viewer", role="viewer", is_hod=False, is_operator=False)
+    return AuthContext(
+        user_id="ANONYMOUS",
+        name="Viewer",
+        role="viewer",
+        is_hod=False,
+        is_faculty=False,
+        is_advisor=False,
+        is_operator=False
+    )
 
 
 def require_operator(
-    user: UserModel = Depends(get_current_user)
+    auth: AuthContext = Depends(get_current_role)
 ) -> AuthContext:
     """Legacy compatibility wrapper enforcing operator / HOD privileges."""
-    if user.role != UserRole.HOD:
+    if not auth.is_operator:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operator authorization required for this operation."
         )
-    return AuthContext(
-        user_id=user.user_id,
-        name=user.name,
-        role=user.role.value,
-        is_hod=True,
-        is_operator=True
-    )
+    return auth
+

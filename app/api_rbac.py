@@ -1,8 +1,9 @@
 import os
 import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Response, UploadFile, File, Form
 from pydantic import BaseModel
+from app.services.excel_service import ExcelService
 
 from app.models.user import (
     UserModel,
@@ -14,6 +15,9 @@ from app.models.user import (
     CreateAdvisorRequest,
     UpdateAdvisorRequest,
     ResetAdvisorPasswordRequest,
+    CreateFacultyRequest,
+    UpdateFacultyRequest,
+    ResetFacultyPasswordRequest,
     ChangePasswordRequest
 )
 from app.core.security import verify_password, hash_password, create_access_token
@@ -21,8 +25,17 @@ from app.auth import (
     get_user_service,
     get_current_user,
     require_hod,
+    require_faculty,
     require_class_advisor,
-    require_any_authenticated_user
+    require_any_authenticated_user,
+    require_dashboard_access,
+    require_live_classroom_access,
+    require_attendance_access,
+    require_sensor_access,
+    require_student_management,
+    require_faculty_management,
+    require_classroom_management,
+    require_session_control
 )
 from app.schemas import ApiResponse
 from app.state import AppState, get_app_state
@@ -41,7 +54,7 @@ def login(
     user_service = Depends(get_user_service)
 ):
     """
-    Authenticates HOD or Class Advisor:
+    Authenticates HOD, Faculty, or Class Advisor:
     - Verifies user ID and hashed password
     - Verifies account is active (disabled accounts rejected with 403)
     - Returns signed JWT token, profile, and target dashboard URL
@@ -71,6 +84,8 @@ def login(
     # Determine redirect URL based strictly on backend role
     if user.role == UserRole.HOD:
         redirect_url = "/hod/dashboard"
+    elif user.role == UserRole.FACULTY:
+        redirect_url = "/faculty/dashboard"
     elif user.role == UserRole.CLASS_ADVISOR:
         redirect_url = "/advisor/dashboard"
     else:
@@ -339,8 +354,185 @@ def reset_advisor_password(
 
 
 # =============================================================================
+# 2b. HOD Faculty Management Endpoints (HOD Role Strictly Required)
+# =============================================================================
+
+@router.get("/hod/faculty", response_model=ApiResponse[List[UserPublicProfile]])
+def list_faculty(
+    current_hod: UserModel = Depends(require_faculty_management),
+    user_service = Depends(get_user_service)
+):
+    """Lists all Faculty members (HOD only)."""
+    faculty = user_service.list_faculty()
+    res = [
+        UserPublicProfile(
+            user_id=f.user_id,
+            name=f.name,
+            role=f.role.value,
+            email=f.email,
+            phone=f.phone,
+            department=f.department,
+            year=f.year,
+            section=f.section,
+            assigned_classroom=f.assigned_classroom,
+            status=f.status.value,
+            created_at=f.created_at
+        )
+        for f in faculty
+    ]
+    return ApiResponse.ok(res)
+
+
+@router.post("/hod/faculty", response_model=ApiResponse[UserPublicProfile], status_code=status.HTTP_201_CREATED)
+def create_faculty(
+    payload: CreateFacultyRequest,
+    current_hod: UserModel = Depends(require_faculty_management),
+    user_service = Depends(get_user_service)
+):
+    """Creates a new Faculty account (HOD only)."""
+    existing = user_service.get_user_by_id(payload.user_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Faculty with User ID '{payload.user_id}' already exists."
+        )
+
+    if payload.confirm_password and payload.password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    hashed = hash_password(payload.password)
+    now = datetime.datetime.utcnow().isoformat()
+    status_enum = UserStatus.ACTIVE if (payload.status or "active").lower() == "active" else UserStatus.DISABLED
+
+    faculty_member = UserModel(
+        user_id=payload.user_id.strip(),
+        name=payload.name.strip(),
+        role=UserRole.FACULTY,
+        password_hash=hashed,
+        email=payload.email,
+        phone=payload.phone,
+        department=payload.department.strip(),
+        year=payload.year.strip() if payload.year else None,
+        section=payload.section.strip().upper() if payload.section else None,
+        assigned_classroom=payload.assigned_classroom,
+        status=status_enum,
+        created_at=now,
+        updated_at=now
+    )
+
+    created = user_service.create_user(faculty_member)
+
+    return ApiResponse.ok(UserPublicProfile(
+        user_id=created.user_id,
+        name=created.name,
+        role=created.role.value,
+        email=created.email,
+        phone=created.phone,
+        department=created.department,
+        year=created.year,
+        section=created.section,
+        assigned_classroom=created.assigned_classroom,
+        status=created.status.value,
+        created_at=created.created_at
+    ))
+
+
+@router.put("/hod/faculty/{user_id}", response_model=ApiResponse[UserPublicProfile])
+def update_faculty(
+    user_id: str = Path(...),
+    payload: UpdateFacultyRequest = None,
+    current_hod: UserModel = Depends(require_faculty_management),
+    user_service = Depends(get_user_service)
+):
+    """Updates an existing Faculty member's details or assigned classroom (HOD only)."""
+    f = user_service.get_user_by_id(user_id)
+    if not f:
+        raise HTTPException(status_code=404, detail=f"Faculty '{user_id}' not found.")
+    if f.role != UserRole.FACULTY:
+        raise HTTPException(status_code=400, detail="Target user is not a Faculty member.")
+
+    updates = {}
+    if payload.name is not None:
+        updates["name"] = payload.name
+    if payload.email is not None:
+        updates["email"] = payload.email
+    if payload.phone is not None:
+        updates["phone"] = payload.phone
+    if payload.department is not None:
+        updates["department"] = payload.department
+    if payload.year is not None:
+        updates["year"] = payload.year
+    if payload.section is not None:
+        updates["section"] = payload.section.upper()
+    if payload.assigned_classroom is not None:
+        updates["assigned_classroom"] = payload.assigned_classroom
+    if payload.status is not None:
+        updates["status"] = payload.status.lower()
+
+    updated = user_service.update_user(user_id, updates)
+    return ApiResponse.ok(UserPublicProfile(
+        user_id=updated.user_id,
+        name=updated.name,
+        role=updated.role.value,
+        email=updated.email,
+        phone=updated.phone,
+        department=updated.department,
+        year=updated.year,
+        section=updated.section,
+        assigned_classroom=updated.assigned_classroom,
+        status=updated.status.value,
+        created_at=updated.created_at
+    ))
+
+
+@router.patch("/hod/faculty/{user_id}/status", response_model=ApiResponse[Dict[str, Any]])
+def update_faculty_status(
+    user_id: str = Path(...),
+    status_val: str = Query(..., alias="status", pattern="^(active|disabled)$"),
+    current_hod: UserModel = Depends(require_faculty_management),
+    user_service = Depends(get_user_service)
+):
+    """Enables or disables a Faculty account (HOD only)."""
+    f = user_service.get_user_by_id(user_id)
+    if not f:
+        raise HTTPException(status_code=404, detail=f"Faculty '{user_id}' not found.")
+    if f.role != UserRole.FACULTY:
+        raise HTTPException(status_code=400, detail="Cannot toggle status of non-faculty account.")
+
+    user_service.update_status(user_id, status_val)
+    return ApiResponse.ok({
+        "user_id": user_id,
+        "status": status_val,
+        "message": f"Faculty account '{user_id}' is now {status_val}."
+    })
+
+
+@router.post("/hod/faculty/{user_id}/reset-password", response_model=ApiResponse[Dict[str, Any]])
+def reset_faculty_password(
+    user_id: str = Path(...),
+    payload: ResetFacultyPasswordRequest = None,
+    current_hod: UserModel = Depends(require_faculty_management),
+    user_service = Depends(get_user_service)
+):
+    """Resets a Faculty member's password (HOD only)."""
+    f = user_service.get_user_by_id(user_id)
+    if not f:
+        raise HTTPException(status_code=404, detail=f"Faculty '{user_id}' not found.")
+    if f.role != UserRole.FACULTY:
+        raise HTTPException(status_code=400, detail="Cannot reset password of non-faculty account.")
+
+    new_hash = hash_password(payload.new_password)
+    user_service.update_password(user_id, new_hash)
+    return ApiResponse.ok({
+        "user_id": user_id,
+        "message": f"Password for Faculty '{user_id}' has been reset successfully."
+    })
+
+
+# =============================================================================
 # 3. Role-Scoped Dashboard & System Status Endpoints
 # =============================================================================
+
 
 @router.get("/dashboard/role-summary", response_model=ApiResponse[Dict[str, Any]])
 def get_role_dashboard_summary(
@@ -379,7 +571,8 @@ def get_role_dashboard_summary(
         active_advisors = sum(1 for a in advisors if a.status == UserStatus.ACTIVE)
 
         # Real system component status
-        mongo_status = "CONNECTED" if user_service.mongo_online else "OFFLINE (RESILIENT LOCAL DB)"
+        is_mongo_online = user_service.mongo_online or (state.db.mongo_db.is_online() if hasattr(state.db, "mongo_db") else False)
+        mongo_status = "CONNECTED" if is_mongo_online else "OFFLINE (RESILIENT LOCAL DB)"
         camera_status = "CONNECTED" if telemetry["camera_online"] else "DISCONNECTED"
         ai_status = "RUNNING" if telemetry["recognition_online"] else "OFFLINE"
         faiss_vectors = state.db.get_embedding_count()
@@ -406,6 +599,37 @@ def get_role_dashboard_summary(
                 "faiss": f"READY ({faiss_vectors} vectors)",
                 "esp32": "READY",
                 "websocket": "ONLINE"
+            },
+            "active_session": active_sess.model_dump() if active_sess else None
+        })
+
+    elif user.role == UserRole.FACULTY:
+        # Faculty: Overview of active instructional session, classroom attendance, and telemetry
+        total_enrolled = len(all_students)
+        present_count = len(present_student_ids)
+        absent_count = max(0, total_enrolled - present_count)
+        att_pct = round((present_count / total_enrolled * 100), 1) if total_enrolled > 0 else 0.0
+
+        return ApiResponse.ok({
+            "role": "faculty",
+            "user_id": user.user_id,
+            "faculty_name": user.name,
+            "department": user.department,
+            "assigned_classroom": user.assigned_classroom or "Smart Classroom 1",
+            "cards": {
+                "total_students": total_enrolled,
+                "present_today": present_count,
+                "absent_today": absent_count,
+                "attendance_percentage": att_pct,
+                "camera_status": "CONNECTED" if telemetry["camera_online"] else "DISCONNECTED",
+                "ai_status": "RUNNING" if telemetry["recognition_online"] else "OFFLINE",
+                "active_alerts": 0 if telemetry["camera_online"] else 1
+            },
+            "system_status": {
+                "fastapi": "ONLINE",
+                "camera": "CONNECTED" if telemetry["camera_online"] else "DISCONNECTED",
+                "ai_pipeline": "RUNNING" if telemetry["recognition_online"] else "OFFLINE",
+                "sensors": "READY"
             },
             "active_session": active_sess.model_dump() if active_sess else None
         })
@@ -458,7 +682,7 @@ def get_scoped_students(
     department: Optional[str] = Query(None),
     section: Optional[str] = Query(None),
     year: Optional[str] = Query(None),
-    user: UserModel = Depends(get_current_user),
+    user: UserModel = Depends(require_student_management),
     state: AppState = Depends(get_app_state)
 ):
     """
@@ -539,6 +763,141 @@ def get_scoped_students(
         })
 
     return ApiResponse.ok(results)
+
+
+class BulkImportJsonRequest(BaseModel):
+    students: List[Dict[str, Any]]
+    default_department: Optional[str] = "AI&DS"
+    default_section: Optional[str] = "B"
+    default_year: Optional[str] = "3rd Year"
+
+
+@router.post("/hod/students/upload-excel", response_model=ApiResponse[Dict[str, Any]])
+@router.post("/students/upload-excel", response_model=ApiResponse[Dict[str, Any]])
+async def upload_students_excel(
+    file: UploadFile = File(...),
+    default_department: str = Form("AI&DS"),
+    default_section: str = Form("B"),
+    default_year: str = Form("3rd Year"),
+    user: UserModel = Depends(require_student_management),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Directly attaches and imports students Excel (.xlsx, .xls) or CSV into MongoDB & SQLite.
+    Bypasses manual student-by-student typing.
+    Accessible to HOD and Class Advisor (scoped if advisor).
+    """
+    filename = file.filename or "students.xlsx"
+    valid_exts = (".xlsx", ".xls", ".csv")
+    if not any(filename.lower().endswith(ext) for ext in valid_exts):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{filename}'. Please upload an Excel (.xlsx, .xls) or CSV file."
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is empty."
+        )
+
+    # If caller is Class Advisor, lock default dept & section to their assignment
+    if user.role == UserRole.CLASS_ADVISOR:
+        default_department = user.department or default_department
+        default_section = user.section or default_section
+        default_year = user.year or default_year
+
+    parsed_students, parse_errors = ExcelService.parse_students_file(
+        file_bytes=file_bytes,
+        filename=filename,
+        default_department=default_department,
+        default_section=default_section,
+        default_year=default_year
+    )
+
+    if not parsed_students:
+        error_msg = "; ".join(parse_errors) if parse_errors else "No valid student rows found in sheet."
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Excel parsing failed: {error_msg}"
+        )
+
+    # Class Advisor restriction: filter only to advisor cohort
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+        scoped_students = []
+        for s in parsed_students:
+            s_dept = s.get("department", "").strip().lower()
+            s_sec = s.get("section", "").strip().upper()
+            if s_dept == adv_dept and s_sec == adv_sec:
+                scoped_students.append(s)
+            else:
+                parse_errors.append(f"Student '{s['register_no']}' omitted (outside your assigned cohort {user.department}-{user.section}).")
+        parsed_students = scoped_students
+        if not parsed_students:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"None of the students in the file belong to your assigned cohort ({user.department} - {user.section})."
+            )
+
+    # Commit directly to Database (MongoDB + SQLite)
+    result = state.db.bulk_import_students(
+        students_list=parsed_students,
+        default_department=default_department,
+        default_section=default_section,
+        default_year=default_year
+    )
+    result["filename"] = filename
+    result["parse_warnings"] = parse_errors
+
+    return ApiResponse.ok(result)
+
+
+@router.post("/hod/students/bulk-import-json", response_model=ApiResponse[Dict[str, Any]])
+@router.post("/students/bulk-import-json", response_model=ApiResponse[Dict[str, Any]])
+def bulk_import_students_json(
+    payload: BulkImportJsonRequest,
+    user: UserModel = Depends(require_student_management),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Directly imports student records from JSON array into MongoDB & SQLite databases.
+    """
+    dept = user.department if user.role == UserRole.CLASS_ADVISOR else (payload.default_department or "AI&DS")
+    sec = user.section if user.role == UserRole.CLASS_ADVISOR else (payload.default_section or "B")
+    year = user.year if user.role == UserRole.CLASS_ADVISOR else (payload.default_year or "3rd Year")
+
+    result = state.db.bulk_import_students(
+        students_list=payload.students,
+        default_department=dept,
+        default_section=sec,
+        default_year=year
+    )
+    return ApiResponse.ok(result)
+
+
+@router.get("/hod/students/template")
+@router.get("/students/template")
+def download_student_template(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$")
+):
+    """Downloads an institutional student roster template (.xlsx or .csv) with sample data."""
+    if format == "csv":
+        data = ExcelService.generate_csv_template()
+        media_type = "text/csv"
+        filename = "students_roster_template.csv"
+    else:
+        data = ExcelService.generate_excel_template()
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = "students_roster_template.xlsx"
+
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 # =============================================================================
@@ -807,4 +1166,298 @@ def get_advisor_classroom_status(
         "title": "Classroom Online",
         "message": "Live camera feed and real-time monitoring active."
     })
+
+
+# =============================================================================
+# 7. IoT & Sensor Endpoints (HOD, Faculty, Advisor Authorized)
+# =============================================================================
+
+@router.get("/sensors/status", response_model=ApiResponse[Dict[str, Any]])
+def get_sensors_status(
+    user: UserModel = Depends(require_sensor_access),
+    state: AppState = Depends(get_app_state)
+):
+    """Retrieves IoT / ESP32 sensor telemetry status (HOD, Faculty, Class Advisor authorized)."""
+    telemetry = state.get_latest_telemetry()
+    latest_sensor = state.db.sensor_repo.get_latest() if (hasattr(state.db, "mongo_db") and state.db.mongo_db.is_online()) else None
+
+    if latest_sensor:
+        return ApiResponse.ok({
+            "status": "ONLINE",
+            "esp32_device_id": latest_sensor.get("device_id", "ESP32_MAIN_01"),
+            "esp32_connected": True,
+            "temperature_c": latest_sensor.get("temperature_c", 24.5),
+            "humidity_pct": latest_sensor.get("humidity_pct", 55.0),
+            "air_quality": latest_sensor.get("air_quality", "GOOD"),
+            "motion_detected": latest_sensor.get("motion_detected", len(telemetry.get("tracks", [])) > 0),
+            "authorized_role": user.role.value,
+            "timestamp": latest_sensor.get("timestamp", datetime.datetime.utcnow().isoformat())
+        })
+
+    return ApiResponse.ok({
+        "status": "ONLINE",
+        "esp32_device_id": "ESP32_MAIN_01",
+        "esp32_connected": telemetry.get("camera_online", False),
+        "temperature_c": 24.5,
+        "humidity_pct": 55.0,
+        "air_quality": "GOOD",
+        "motion_detected": len(telemetry.get("tracks", [])) > 0,
+        "authorized_role": user.role.value,
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    })
+
+
+# =============================================================================
+# 8. RBAC-Protected Attendance Endpoints (HOD, Faculty, Advisor Authorized)
+# =============================================================================
+
+@router.get("/attendance", response_model=ApiResponse[List[Dict[str, Any]]])
+def list_attendance(
+    session_id: Optional[str] = Query(None, description="Filter by session ID"),
+    student_id: Optional[str] = Query(None, description="Filter by student ID"),
+    status: Optional[str] = Query(None, description="Filter by status: PRESENT or LATE"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    user: UserModel = Depends(require_attendance_access),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Lists attendance records with strict role-scoping:
+    - HOD: System-wide visibility across all classrooms, sessions, and students.
+    - Faculty: Visibility across their classrooms and conducted sessions.
+    - Class Advisor: Strictly restricted to students in their assigned department & section.
+    """
+    # Role Scoping for Class Advisor
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+
+        if student_id:
+            st = state.db.get_student(student_id)
+            if not st:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student '{student_id}' not found.")
+            st_dept = (st.get("department") or "").strip().lower()
+            st_sec = (st.get("section") or "").strip().upper()
+            if (adv_dept and st_dept != adv_dept) or (adv_sec and st_sec != adv_sec):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access forbidden: Student is outside your assigned cohort ({user.department} - {user.section})."
+                )
+            records = state.db.list_attendance(session_id=session_id, student_id=student_id, status=status, limit=limit, offset=offset)
+            return ApiResponse.ok(records)
+
+        # Advisor listing without student_id: filter only to advisor's students
+        all_students = state.db.get_all_students()
+        advisor_student_ids = {
+            s["student_id"] for s in all_students
+            if (not adv_dept or (s.get("department") or "").strip().lower() == adv_dept)
+            and (not adv_sec or (s.get("section") or "").strip().upper() == adv_sec)
+        }
+        all_recs = state.db.list_attendance(session_id=session_id, status=status, limit=500, offset=0)
+        filtered = [r for r in all_recs if r.get("student_id") in advisor_student_ids]
+        paged = filtered[offset:offset + limit]
+        return ApiResponse.ok(paged)
+
+    # HOD and Faculty
+    records = state.db.list_attendance(
+        session_id=session_id,
+        student_id=student_id,
+        status=status,
+        limit=limit,
+        offset=offset
+    )
+    return ApiResponse.ok(records)
+
+
+@router.get("/attendance/session/{session_id}", response_model=ApiResponse[Dict[str, Any]])
+def get_session_attendance(
+    session_id: str = Path(...),
+    user: UserModel = Depends(require_attendance_access),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Retrieves full attendance report for a specific session with RBAC scoping:
+    - HOD & Faculty: Full session report and roster reconciliation.
+    - Class Advisor: Scoped to their assigned cohort students within the session.
+    """
+    sess = state.session_manager.get_session_info(session_id)
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
+
+    report = state.attendance_engine.generate_session_report(session_id)
+    rep_dict = report.model_dump()
+
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+
+        all_students = state.db.get_all_students()
+        cohort_student_ids = {
+            s["student_id"] for s in all_students
+            if (not adv_dept or (s.get("department") or "").strip().lower() == adv_dept)
+            and (not adv_sec or (s.get("section") or "").strip().upper() == adv_sec)
+        }
+
+        # Filter records and not_seen to advisor's cohort
+        filtered_records = [r for r in rep_dict.get("records", []) if r.get("student_id") in cohort_student_ids]
+        filtered_not_seen = [sid for sid in rep_dict.get("not_seen_students", []) if sid in cohort_student_ids]
+        pres_cnt = sum(1 for r in filtered_records if r.get("status") == "PRESENT")
+        late_cnt = sum(1 for r in filtered_records if r.get("status") == "LATE")
+
+        rep_dict["records"] = filtered_records
+        rep_dict["not_seen_students"] = filtered_not_seen
+        rep_dict["total_enrolled"] = len(cohort_student_ids)
+        rep_dict["present_count"] = pres_cnt
+        rep_dict["late_count"] = late_cnt
+        rep_dict["not_seen_count"] = len(filtered_not_seen)
+
+    return ApiResponse.ok(rep_dict)
+
+
+@router.get("/attendance/student/{student_id}", response_model=ApiResponse[Dict[str, Any]])
+def get_student_attendance_history(
+    student_id: str = Path(...),
+    user: UserModel = Depends(require_attendance_access),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Retrieves complete attendance history for a single student:
+    - HOD & Faculty: Access any student.
+    - Class Advisor: Strictly restricted to their assigned cohort. Unauthorized queries return 403.
+    """
+    st = state.db.get_student(student_id)
+    if not st:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student '{student_id}' not found.")
+
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+        st_dept = (st.get("department") or "").strip().lower()
+        st_sec = (st.get("section") or "").strip().upper()
+
+        if (adv_dept and st_dept != adv_dept) or (adv_sec and st_sec != adv_sec):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: Student '{student_id}' is outside your assigned cohort ({user.department} - {user.section})."
+            )
+
+    history = state.db.get_student_attendance_history(student_id)
+    tot_sessions = len(history)
+    present_cnt = sum(1 for h in history if h.get("status") == "PRESENT")
+    late_cnt = sum(1 for h in history if h.get("status") == "LATE")
+    att_pct = round(((present_cnt + late_cnt) / tot_sessions * 100), 1) if tot_sessions > 0 else 0.0
+
+    return ApiResponse.ok({
+        "student_id": student_id,
+        "student_name": st.get("student_name", student_id),
+        "department": st.get("department", ""),
+        "section": st.get("section", ""),
+        "total_sessions": tot_sessions,
+        "present_count": present_cnt,
+        "late_count": late_cnt,
+        "attendance_percentage": att_pct,
+        "records": history
+    })
+
+
+@router.get("/attendance/summary", response_model=ApiResponse[Dict[str, Any]])
+def get_attendance_summary(
+    session_id: Optional[str] = Query(None, description="Optional session ID"),
+    user: UserModel = Depends(require_attendance_access),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Returns attendance summary aggregates with role-scoping:
+    - HOD & Faculty: Overall or session summary.
+    - Class Advisor: Cohort-scoped attendance aggregates.
+    """
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+        all_students = state.db.get_all_students()
+        cohort_student_ids = {
+            s["student_id"] for s in all_students
+            if (not adv_dept or (s.get("department") or "").strip().lower() == adv_dept)
+            and (not adv_sec or (s.get("section") or "").strip().upper() == adv_sec)
+        }
+        all_recs = state.db.list_attendance(session_id=session_id, limit=1000)
+        cohort_recs = [r for r in all_recs if r.get("student_id") in cohort_student_ids]
+
+        tot = len(cohort_recs)
+        pres = sum(1 for r in cohort_recs if r.get("status") == "PRESENT")
+        late = sum(1 for r in cohort_recs if r.get("status") == "LATE")
+        uniq = len(set(r.get("student_id") for r in cohort_recs if r.get("student_id")))
+        sims = [r.get("latest_similarity", 0.0) for r in cohort_recs if r.get("latest_similarity") is not None]
+        avg_sim = round(float(sum(sims) / len(sims)), 4) if sims else 0.0
+
+        return ApiResponse.ok({
+            "session_id": session_id,
+            "total_records": tot,
+            "present_count": pres,
+            "late_count": late,
+            "unique_students": uniq,
+            "average_similarity": avg_sim,
+            "scoped_to": f"{user.department} - {user.section}"
+        })
+
+    summary = state.db.get_attendance_summary(session_id=session_id)
+    return ApiResponse.ok(summary)
+
+
+@router.get("/attendance/export/{session_id}")
+def export_attendance(
+    session_id: str = Path(...),
+    format: str = Query("json", pattern="^(json|csv)$"),
+    user: UserModel = Depends(require_attendance_access),
+    state: AppState = Depends(get_app_state)
+):
+    """
+    Exports session attendance in CSV or JSON format with RBAC scoping.
+    """
+    import io
+    import csv
+
+    sess = state.session_manager.get_session_info(session_id)
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
+
+    report = state.attendance_engine.generate_session_report(session_id)
+    records = report.records
+
+    if user.role == UserRole.CLASS_ADVISOR:
+        adv_dept = (user.department or "").strip().lower()
+        adv_sec = (user.section or "").strip().upper()
+        all_students = state.db.get_all_students()
+        cohort_student_ids = {
+            s["student_id"] for s in all_students
+            if (not adv_dept or (s.get("department") or "").strip().lower() == adv_dept)
+            and (not adv_sec or (s.get("section") or "").strip().upper() == adv_sec)
+        }
+        records = [r for r in records if r.student_id in cohort_student_ids]
+
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["session_id", "student_id", "student_name", "status", "first_seen", "last_seen", "similarity"])
+        for r in records:
+            writer.writerow([r.session_id, r.student_id, r.student_name, r.status.value, r.first_seen, r.last_seen, r.latest_similarity])
+
+        csv_content = output.getvalue()
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=attendance_{session_id}.csv"}
+        )
+
+    # JSON export
+    return ApiResponse.ok({
+        "session_id": session_id,
+        "date": sess.date,
+        "class_section": sess.class_section,
+        "subject": sess.subject,
+        "total_records": len(records),
+        "records": [r.model_dump() for r in records]
+    })
+
+
 

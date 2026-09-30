@@ -298,7 +298,8 @@
         SmartClass
         <span class="badge-vision">Vision AI</span>
       </h1>
-      <p>Institutional Face Recognition & Smart Attendance Portal</p>
+      <p>Secure Portal Login & Institutional Smart Board Attendance</p>
+      <!-- SmartClass Vision AI - Smart Board Live Portal | Supported: CAMERA SOURCE | PC CAMERA | DROIDCAM | EXTENSION | ESP32 CAMERA -->
     </div>
 
     <div class="login-body">
@@ -318,7 +319,7 @@
               type="text" 
               id="userId" 
               class="form-control" 
-              placeholder="e.g. HOD001, ADV001" 
+              placeholder="e.g. HOD001, FAC001, ADV001" 
               required 
               autocomplete="username"
               autofocus
@@ -350,10 +351,13 @@
           <div class="preset-selector-label">Quick Role Credentials</div>
           <div class="preset-btn-row">
             <button type="button" class="preset-role-btn" onclick="selectRolePreset('HOD001')">
-              🏛️ <span>HOD (HOD001)</span>
+              🏛️ <span>HOD</span>
+            </button>
+            <button type="button" class="preset-role-btn" onclick="selectRolePreset('FAC001')">
+              👨‍🏫 <span>Faculty</span>
             </button>
             <button type="button" class="preset-role-btn" onclick="selectRolePreset('ADV001')">
-              👥 <span>Advisor (ADV001)</span>
+              👥 <span>Advisor</span>
             </button>
           </div>
         </div>
@@ -376,6 +380,7 @@
         </div>
         <div class="role-policy-text">
           <strong>HOD:</strong> Full System Administration & Monitoring<br>
+          <strong>Faculty:</strong> Instructional Classroom & Real-time Attendance<br>
           <strong>Class Advisor:</strong> Assigned Classroom & Student Verification
         </div>
       </div>
